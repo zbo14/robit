@@ -1,0 +1,26 @@
+{
+  "name": "autoweb",
+  "version": "0.0.1",
+  "description": "Browser automation framework",
+  "bin": "index.js",
+  "scripts": {
+    "example": "node index example.config.js",
+    "lint": "standard",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "browser automation",
+    "configuration",
+    "framework",
+    "puppeteer",
+    "web scraping"
+  ],
+  "author": "Zachary Balder",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "standard": "^16.0.4"
+  },
+  "dependencies": {
+    "puppeteer": "^10.4.0"
+  }
+}
