@@ -31,6 +31,7 @@ const puppeteer = require('puppeteer')
  * @property  {String} to       - navigate 'back', 'forward', or to a URL.
  * @property  {Step}   wait     - a wait sub-step that must complete with this step.
  * @property  {String} waitFor  -
+ * @property  {String} xpath    - xpath of the element(s) to target
  */
 
 const capitalize = str => str[0].toUpperCase() + str.slice(1)
@@ -110,6 +111,7 @@ const scrape = async (page, step, i) => {
   let children
   let done
   let selector
+  let xpath
 
   let { elem, key, result, value } = entries.shift()
 
@@ -118,16 +120,20 @@ const scrape = async (page, step, i) => {
       attribute = 'textContent'
       children = []
       selector = value
+      xpath = null
     } else {
       attribute = value.attribute || 'textContent'
       children = value.children || []
       selector = value.selector
+      xpath = value.xpath
     }
 
     const childEntries = Object.entries(children)
 
     if (childEntries.length) {
-      const elems = await elem.$$(selector)
+      const method = selector ? '$$' : '$x'
+      const arg = selector || xpath
+      const elems = await page[method](arg)
 
       elems.forEach((elem, i) => {
         let ref = result
@@ -143,9 +149,23 @@ const scrape = async (page, step, i) => {
         })
       })
     } else {
-      const values = await elem.$$eval(selector, (elems, attribute) => {
-        return elems.map(elem => elem[attribute])
-      }, attribute)
+      let values = []
+
+      if (selector) {
+        values = await elem.$$eval(selector, (elems, attribute) => {
+          return elems.map(elem => elem[attribute])
+        }, attribute)
+      } else if (xpath) {
+        const elems = await elem.$x(xpath)
+
+        const promises = elems.map(elem => {
+          return elem.evaluate((node, attribute) => {
+            return node[attribute]
+          }, attribute)
+        })
+
+        values = await Promise.all(promises)
+      }
 
       values.forEach((value, i) => {
         if (!result) {
@@ -193,7 +213,18 @@ const handleStep = async (page, step, i = 0) => {
         promises.push(wait(page, { for: step.waitFor }))
       }
 
-      promises.push(page.$eval(step.selector, elem => elem.click()))
+      if (step.selector) {
+        promises.push(page.$eval(step.selector, elem => elem.click()))
+      } else if (step.xpath) {
+        promises.push(
+          page
+            .$x(step.xpath)
+            .then(([elem]) => {
+              return elem && elem.evaluate(node => node.click())
+            })
+        )
+      }
+
       await Promise.all(promises)
       break
     }
@@ -250,8 +281,15 @@ const handleStep = async (page, step, i = 0) => {
     }
 
     case 'type': {
-      const { selector, text, ...opts } = step
-      await page.type(selector, text, opts)
+      const { selector, text, xpath, ...opts } = step
+
+      if (selector) {
+        await page.type(selector, text, opts)
+      } else if (xpath) {
+        const [elem] = await page.$x(xpath)
+        await elem.type(text, opts)
+      }
+
       break
     }
 

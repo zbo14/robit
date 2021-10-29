@@ -10,7 +10,7 @@ module.exports = {
   steps: [
     {
       action: 'type',
-      selector: 'input[aria-label="Search"]',
+      xpath: '//input[@aria-label="Search"]',
       text: 'foo',
       delay: 200
     },
@@ -37,7 +37,7 @@ module.exports = {
 
               children: {
                 link: {
-                  selector: 'a',
+                  xpath: './/a',
                   attribute: 'href'
                 },
 
