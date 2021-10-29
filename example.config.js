@@ -12,46 +12,49 @@ module.exports = {
       action: 'type',
       selector: 'input[aria-label="Search"]',
       text: 'foo',
-
-      options: {
-        delay: 200
-      }
+      delay: 200
     },
     {
       action: 'click',
       selector: 'input[type="submit"]',
-
-      wait: {
-        for: 'navigation'
-      }
+      waitFor: 'navigation'
     },
     {
-      action: 'scrape',
+      action: 'repeat',
+      times: 5,
 
-      data: {
-        result: {
-          selector: 'div#rso > div',
+      subSteps: [
+        {
+          action: 'screenshot',
+          path: path.resolve('./private/screenshots/screenshot-$i.png')
+        },
+        {
+          action: 'scrape',
 
-          children: {
-            link: {
-              selector: 'a',
-              attribute: 'href'
-            },
+          data: {
+            result: {
+              selector: 'div#rso > div',
 
-            snippet: 'div[style="-webkit-line-clamp:2"]',
-            title: 'h3'
-          }
+              children: {
+                link: {
+                  selector: 'a',
+                  attribute: 'href'
+                },
+
+                snippet: 'div[style="-webkit-line-clamp:2"]',
+                title: 'h3'
+              }
+            }
+          },
+
+          path: path.resolve('./private/results/results-$i.json')
+        },
+        {
+          action: 'click',
+          selector: 'a#pnnext',
+          waitFor: 'navigation'
         }
-      },
-
-      path: path.resolve('./private/results.json')
-    },
-    {
-      action: 'screenshot',
-
-      options: {
-        path: path.resolve('./private/screenshot.png')
-      }
+      ]
     }
   ]
 }

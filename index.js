@@ -7,81 +7,99 @@ const path = require('path')
 const puppeteer = require('puppeteer')
 
 /**
- * @param  {Page}   page
- * @param  {Object} details
+ * @typedef   {Object} Config
+ *
+ * @property  {Number}            defaultNavigationTimeout
+ * @property  {Number}            defaultTimeout
+ * @property  {Boolean}           headless
+ * @property  {(Boolean|Number)}  keepOpenAfter
+ * @property  {Step[]}            steps
+ * @property  {String}            url
+ */
+
+/**
+ * @typedef   {Object} Step
+ *
+ * @property  {String} action   - string indicating which action to perform.
+ * @property  {Data}   data     - an object describing what data to scrape.
+ * @property  {String} for      - condition to wait for before proceeding.
+ * @property  {String} path     - the path of a file to write to.
+ * @property  {String} selector - the CSS selector of the element(s) to target.
+ * @property  {Step[]} subSteps - sub-steps to perform multiple times before proceeding.
+ * @property  {String} text     - text to type into element.
+ * @property  {Number} times    - number of times to repeat the `subSteps`.
+ * @property  {String} to       - navigate 'back', 'forward', or to a URL.
+ * @property  {Step}   wait     - a wait sub-step that must complete with this step.
+ * @property  {String} waitFor  -
+ */
+
+const capitalize = str => str[0].toUpperCase() + str.slice(1)
+const replaceIndex = (str, i) => str.replace(/\$i/g, i)
+
+/**
+ * @param  {Page}  page
+ * @param  {Step}  step
  *
  * @return {Promise}
  */
-const wait = (page, details) => {
-  const options = details.options || {}
+const wait = (page, step) => {
   const args = []
 
-  let method = 'waitFor'
+  let method = capitalize(step.for)
 
-  switch (details.for) {
+  switch (step.for) {
     case 'function': {
-      args.push(
-        details.function,
-        options,
-        ...(details.args || [])
-      )
-
-      method += 'Function'
+      const { args: funcArgs = [], function: func, ...opts } = step
+      args.push(func, opts, ...funcArgs)
       break
     }
 
     case 'navigation': {
-      args.push(options)
-      method += 'Navigation'
+      args.push(step)
       break
     }
 
     case 'networkIdle': {
-      args.push(options)
-      method += 'NetworkIdle'
+      args.push(step)
       break
     }
 
-    case 'request': {
-      args.push(details.urlOrPredicate, options)
-      method += 'Request'
-      break
-    }
-
+    case 'request':
     case 'response': {
-      args.push(details.urlOrPredicate, options)
-      method += 'Response'
+      const { function: func, url, ...opts } = step
+      args.push(func || url, opts)
       break
     }
 
     case 'selector': {
-      args.push(details.selector, options)
-      method += 'Selector'
+      const { selector, ...opts } = step
+      args.push(selector, opts)
       break
     }
 
     case 'timeout': {
-      args.push(details.timeout)
-      method += 'Timeout'
+      args.push(step.timeout)
       break
     }
 
     case 'xpath': {
-      args.push(details.xpath, options)
-      args.push('XPath')
+      const { xpath, ...opts } = step
+      args.push(xpath, opts)
+      method = 'XPath'
     }
   }
 
-  return page[method](...args)
+  return page['waitFor' + method](...args)
 }
 
 /**
  * @param  {Page}   page
  * @param  {Object} step
+ * @param  {Number} [i]
  *
  * @return {Promise}
  */
-const scrape = async (page, step) => {
+const scrape = async (page, step, i) => {
   const entries = Object
     .entries(step.data)
     .map(([key, value]) => ({ elem: page, key, result: null, value }))
@@ -149,23 +167,106 @@ const scrape = async (page, step) => {
     }
   }
 
+  const filename = replaceIndex(step.path, i)
+  const dirname = path.dirname(filename)
   const contents = JSON.stringify(results, null, 2)
 
-  fs.createWriteStream(step.path).write(contents)
+  await fs.promises.mkdir(dirname, { recursive: true }).catch(() => {})
+  await fs.promises.writeFile(filename, contents)
 }
 
 /**
- * @param  {Object}           config
- * @param  {Number}           config.defaultNavigationTimeout
- * @param  {Number}           config.defaultTimeout
- * @param  {Boolean}          config.headless
- * @param  {(Boolean|Number)} config.keepOpenAfter
- * @param  {Object[]}         config.steps
- * @param  {String}           config.url
+ * @param  {Page}   page
+ * @param  {Object} step
+ * @param  {Number} [i = 0]
  *
  * @return {Promise}
  */
-const browserAutomate = async config => {
+const handleStep = async (page, step, i = 0) => {
+  switch (step.action) {
+    case 'click': {
+      const promises = []
+
+      if (step.wait) {
+        promises.push(wait(page, step.wait))
+      } else if (step.waitFor) {
+        promises.push(wait(page, { for: step.waitFor }))
+      }
+
+      promises.push(page.$eval(step.selector, elem => elem.click()))
+      await Promise.all(promises)
+      break
+    }
+
+    case 'go': {
+      const args = []
+      const { to, ...opts } = step
+
+      let method = 'go'
+
+      switch (to) {
+        case 'back':
+        case 'forward': {
+          method += capitalize(to)
+          break
+        }
+
+        default: {
+          args.push(to)
+          method += 'to'
+        }
+      }
+
+      args.push(opts)
+      await page[method(...args)]
+      break
+    }
+
+    case 'repeat': {
+      const iters = Math.abs(step.times) || 10
+
+      for (let i = 1; i <= iters; i++) {
+        for (const subStep of step.subSteps) {
+          await handleStep(page, subStep, i)
+        }
+      }
+
+      break
+    }
+
+    case 'scrape': {
+      await scrape(page, step, i)
+      break
+    }
+
+    case 'screenshot': {
+      const filename = replaceIndex(step.path, i)
+      const dirname = path.dirname(filename)
+
+      await fs.promises.mkdir(dirname, { recursive: true }).catch(() => {})
+      await page.screenshot({ ...step, path: filename })
+
+      break
+    }
+
+    case 'type': {
+      const { selector, text, ...opts } = step
+      await page.type(selector, text, opts)
+      break
+    }
+
+    case 'wait': {
+      await wait(page, step)
+    }
+  }
+}
+
+/**
+ * @param  {Config} config
+ *
+ * @return {Promise}
+ */
+const automateBrowser = async config => {
   const browser = await puppeteer.launch({
     defaultViewport: null,
     headless: config.headless
@@ -184,65 +285,7 @@ const browserAutomate = async config => {
   await page.goto(config.url)
 
   for (const step of config.steps) {
-    const options = step.options || {}
-    const promises = []
-    const promise = promises.push.bind(promises)
-
-    switch (step.action) {
-      case 'click': {
-        if (step.wait) {
-          promise(wait(page, step.wait))
-        }
-
-        promise(page.$eval(step.selector, elem => elem.click()))
-        break
-      }
-
-      case 'go': {
-        const args = []
-
-        let method
-
-        switch (step.to) {
-          case 'back':
-          case 'forward': {
-            method = 'go' + step[0].toUpperCase() + step.to.slice(1)
-            break
-          }
-
-          default: {
-            args.push(step.to)
-            method = 'goto'
-          }
-        }
-
-        args.push(options)
-        promise(page[method(...args)])
-        break
-      }
-
-      case 'scrape': {
-        promise(scrape(page, step))
-        break
-      }
-
-      case 'screenshot': {
-        promise(page.screenshot(step.options))
-        break
-      }
-
-      case 'type': {
-        promise(page.type(step.selector, step.text, options))
-        break
-      }
-
-      case 'wait': {
-        promise(wait(page, step))
-        break
-      }
-    }
-
-    await Promise.all(promises)
+    await handleStep(page, step)
   }
 
   if (Number.isInteger(config.keepOpenAfter) && config.keepOpenAfter > 0) {
@@ -269,7 +312,7 @@ const main = async () => {
     throw new Error('Failed to read config')
   }
 
-  await browserAutomate(config)
+  await automateBrowser(config)
 }
 
 main().catch(err => {
