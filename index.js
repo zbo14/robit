@@ -4,7 +4,8 @@
 
 const fs = require('fs')
 const path = require('path')
-const puppeteer = require('puppeteer')
+const puppeteer = require('puppeteer-extra')
+const StealthPlugin = require('puppeteer-extra-plugin-stealth')
 
 /**
  * @typedef   {Object} Config
@@ -13,6 +14,7 @@ const puppeteer = require('puppeteer')
  * @property  {Number}            defaultTimeout
  * @property  {Boolean}           headless
  * @property  {(Boolean|Number)}  keepOpenAfter
+ * @property  {Number}            maxPages
  * @property  {Step[]}            steps
  * @property  {String}            url
  */
@@ -30,7 +32,7 @@ const puppeteer = require('puppeteer')
  * @property  {Number} times    - number of times to repeat the `subSteps`.
  * @property  {String} to       - navigate 'back', 'forward', or to a URL.
  * @property  {Step}   wait     - a wait sub-step that must complete with this step.
- * @property  {String} waitFor  -
+ * @property  {String} waitFor  - convenience declaration for `wait.for`
  * @property  {String} xpath    - xpath of the element(s) to target
  */
 
@@ -55,11 +57,7 @@ const wait = (page, step) => {
       break
     }
 
-    case 'navigation': {
-      args.push(step)
-      break
-    }
-
+    case 'navigation':
     case 'networkIdle': {
       args.push(step)
       break
@@ -94,13 +92,12 @@ const wait = (page, step) => {
 }
 
 /**
- * @param  {Page}   page
- * @param  {Object} step
- * @param  {Number} [i]
+ * @param  {Page}    page
+ * @param  {Object}  step
  *
  * @return {Promise}
  */
-const scrape = async (page, step, i) => {
+const match = async (page, step) => {
   const entries = Object
     .entries(step.data)
     .map(([key, value]) => ({ elem: page, key, result: null, value }))
@@ -187,22 +184,18 @@ const scrape = async (page, step, i) => {
     }
   }
 
-  const filename = replaceIndex(step.path, i)
-  const dirname = path.dirname(filename)
-  const contents = JSON.stringify(results, null, 2)
-
-  await fs.promises.mkdir(dirname, { recursive: true }).catch(() => {})
-  await fs.promises.writeFile(filename, contents)
+  return results
 }
 
 /**
- * @param  {Page}   page
- * @param  {Object} step
- * @param  {Number} [i = 0]
+ * @param  {Browser}  browser
+ * @param  {Page}     page
+ * @param  {Object}   step
+ * @param  {Number}   [i = 0]
  *
  * @return {Promise}
  */
-const handleStep = async (page, step, i = 0) => {
+const handleStep = async (browser, page, step, i = 0) => {
   switch (step.action) {
     case 'click': {
       const promises = []
@@ -224,6 +217,32 @@ const handleStep = async (page, step, i = 0) => {
             })
         )
       }
+
+      await Promise.all(promises)
+      break
+    }
+
+    case 'crawl': {
+      const { attribute, selector, subSteps, xpath } = step
+      const data = { links: { attribute, selector, xpath } }
+      const results = await match(page, { data })
+      const links = results.flatMap(({ links }) => links.filter(Boolean))
+
+      const promises = links.map(async (link, j) => {
+        const page = await browser.getPage()
+
+        try {
+          await page.goto(link)
+
+          for (const subStep of subSteps) {
+            await handleStep(browser, page, subStep, results.length * i + j + 1)
+          }
+        } catch (err) {
+          console.error(err)
+        }
+
+        browser.releasePage(page)
+      })
 
       await Promise.all(promises)
       break
@@ -256,9 +275,9 @@ const handleStep = async (page, step, i = 0) => {
     case 'repeat': {
       const iters = Math.abs(step.times) || 10
 
-      for (let i = 1; i <= iters; i++) {
+      for (let j = 1; j <= iters; j++) {
         for (const subStep of step.subSteps) {
-          await handleStep(page, subStep, i)
+          await handleStep(browser, page, subStep, i * iters + j)
         }
       }
 
@@ -266,7 +285,13 @@ const handleStep = async (page, step, i = 0) => {
     }
 
     case 'scrape': {
-      await scrape(page, step, i)
+      const results = await match(page, step)
+      const filename = replaceIndex(step.path, i)
+      const dirname = path.dirname(filename)
+      const contents = JSON.stringify(results, null, 2)
+
+      await fs.promises.mkdir(dirname, { recursive: true }).catch(() => {})
+      await fs.promises.writeFile(filename, contents)
       break
     }
 
@@ -299,40 +324,6 @@ const handleStep = async (page, step, i = 0) => {
   }
 }
 
-/**
- * @param  {Config} config
- *
- * @return {Promise}
- */
-const automateBrowser = async config => {
-  const browser = await puppeteer.launch({
-    defaultViewport: null,
-    headless: config.headless
-  })
-
-  const page = await browser.newPage()
-
-  if (config.defaultNavigationTimeout) {
-    page.setDefaultNavigationTimeout(config.defaultNavigationTimeout)
-  }
-
-  if (config.defaultTimeout) {
-    page.setDefaultTimeout(config.defaultTimeout)
-  }
-
-  await page.goto(config.url)
-
-  for (const step of config.steps) {
-    await handleStep(page, step)
-  }
-
-  if (Number.isInteger(config.keepOpenAfter) && config.keepOpenAfter > 0) {
-    setTimeout(() => browser.close(), config.keepOpenAfter)
-  } else if (!config.keepOpenAfter) {
-    await browser.close()
-  }
-}
-
 const main = async () => {
   let pathToConfig = process.argv[2]
 
@@ -350,7 +341,68 @@ const main = async () => {
     throw new Error('Failed to read config')
   }
 
-  await automateBrowser(config)
+  if (config.useStealthPlugin) {
+    puppeteer.use(StealthPlugin)
+  }
+
+  const browser = await puppeteer.launch({
+    defaultViewport: null,
+    headless: config.headless
+  })
+
+  const page = await browser.newPage()
+  const pages = []
+  const queue = []
+
+  let numPages = 0
+
+  browser.getPage = async () => {
+    let page = pages.find(page => page.available)
+
+    if (!page) {
+      if (numPages < config.maxPages) {
+        ++numPages
+        page = await browser.newPage()
+        pages.push(page)
+      } else {
+        page = await new Promise(resolve => queue.push(resolve))
+      }
+    }
+
+    page.available = false
+
+    return page
+  }
+
+  browser.releasePage = page => {
+    const resolve = queue.shift()
+
+    if (resolve) {
+      resolve(page)
+    } else {
+      page.available = true
+    }
+  }
+
+  if (config.defaultNavigationTimeout) {
+    page.setDefaultNavigationTimeout(config.defaultNavigationTimeout)
+  }
+
+  if (config.defaultTimeout) {
+    page.setDefaultTimeout(config.defaultTimeout)
+  }
+
+  await page.goto(config.url)
+
+  for (const step of config.steps) {
+    await handleStep(browser, page, step)
+  }
+
+  if (Number.isInteger(config.keepOpenAfter) && config.keepOpenAfter > 0) {
+    setTimeout(() => browser.close(), config.keepOpenAfter)
+  } else if (!config.keepOpenAfter) {
+    await browser.close()
+  }
 }
 
 main().catch(err => {

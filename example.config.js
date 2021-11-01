@@ -6,6 +6,8 @@ module.exports = {
   defaultTimeout: 5e3,
   headless: false,
   keepOpenAfter: 10e3,
+  maxPages: 4,
+  useStealthPlugin: false,
 
   steps: [
     {
@@ -48,6 +50,23 @@ module.exports = {
           },
 
           path: path.resolve('./private/results/results-$i.json')
+        },
+        {
+          action: 'crawl',
+          selector: 'a',
+          attribute: 'href',
+
+          subSteps: [
+            {
+              action: 'scrape',
+
+              data: {
+                title: 'title'
+              },
+
+              path: path.resolve('./private/titles/titles-$i.json')
+            }
+          ]
         },
         {
           action: 'click',
