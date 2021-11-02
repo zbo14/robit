@@ -3,11 +3,11 @@ const path = require('path')
 module.exports = {
   url: 'https://google.com',
 
-  defaultTimeout: 5e3,
+  defaultTimeout: 10e3,
   headless: false,
   keepOpenAfter: 10e3,
   maxPages: 4,
-  useStealthPlugin: false,
+  useStealthPlugin: true,
 
   steps: [
     {
@@ -52,22 +52,33 @@ module.exports = {
           path: path.resolve('./private/results/results-$i.json')
         },
         {
-          action: 'crawl',
-          selector: 'a',
-          attribute: 'href',
+          action: 'scrape',
 
-          subSteps: [
-            {
-              action: 'scrape',
-
-              data: {
-                title: 'title'
-              },
-
-              path: path.resolve('./private/titles/titles-$i.json')
+          data: {
+            number: {
+              regex: '\\d{4}'
             }
-          ]
+          },
+
+          path: path.resolve('./private/numbers/numbers-$i.json')
         },
+        // {
+        //   action: 'crawl',
+        //   selector: 'a',
+        //   attribute: 'href',
+
+        //   subSteps: [
+        //     {
+        //       action: 'scrape',
+
+        //       data: {
+        //         title: 'title'
+        //       },
+
+        //       path: path.resolve('./private/titles/titles-$i.json')
+        //     }
+        //   ]
+        // },
         {
           action: 'click',
           selector: 'a#pnnext',

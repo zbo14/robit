@@ -26,14 +26,15 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth')
  * @property  {Data}   data     - an object describing what data to scrape.
  * @property  {String} for      - condition to wait for before proceeding.
  * @property  {String} path     - the path of a file to write to.
+ * @property  {String} regex    - regular expression pattern to match for scraping.
  * @property  {String} selector - the CSS selector of the element(s) to target.
  * @property  {Step[]} subSteps - sub-steps to perform multiple times before proceeding.
  * @property  {String} text     - text to type into element.
  * @property  {Number} times    - number of times to repeat the `subSteps`.
- * @property  {String} to       - navigate 'back', 'forward', or to a URL.
  * @property  {Step}   wait     - a wait sub-step that must complete with this step.
- * @property  {String} waitFor  - convenience declaration for `wait.for`
- * @property  {String} xpath    - xpath of the element(s) to target
+ * @property  {String} waitFor  - convenience declaration for `wait.for`.
+ * @property  {String} where    - navigate 'back', 'forward', or to a URL.
+ * @property  {String} xpath    - xpath of the element(s) to target.
  */
 
 const capitalize = str => str[0].toUpperCase() + str.slice(1)
@@ -107,6 +108,7 @@ const match = async (page, step) => {
   let attribute
   let children
   let done
+  let regex
   let selector
   let xpath
 
@@ -116,11 +118,13 @@ const match = async (page, step) => {
     if (typeof value === 'string') {
       attribute = 'textContent'
       children = []
+      regex = null
       selector = value
       xpath = null
     } else {
       attribute = value.attribute || 'textContent'
       children = value.children || []
+      regex = value.regex
       selector = value.selector
       xpath = value.xpath
     }
@@ -162,17 +166,29 @@ const match = async (page, step) => {
         })
 
         values = await Promise.all(promises)
+      } else if (regex) {
+        regex = new RegExp(regex, 'gi')
+
+        const content = (
+          await elem?.content?.() ||
+          await elem.evaluate(node => node.outerHTML) ||
+          ''
+        )
+
+        values = [...content.matchAll(regex)].map(([_]) => _)
       }
 
       values.forEach((value, i) => {
-        if (!result) {
-          result = results[i] = results[i] || {}
+        let ref = result
+
+        if (!ref) {
+          ref = results[i] = results[i] || {}
         }
 
-        if (result[key] !== undefined) {
-          result[key] = [].concat(result[key]).concat(value)
+        if (ref[key] !== undefined) {
+          ref[key] = [].concat(ref[key]).concat(value)
         } else {
-          result[key] = value
+          ref[key] = value
         }
       })
     }
@@ -250,19 +266,19 @@ const handleStep = async (browser, page, step, i = 0) => {
 
     case 'go': {
       const args = []
-      const { to, ...opts } = step
+      const { where, ...opts } = step
 
       let method = 'go'
 
-      switch (to) {
+      switch (where) {
         case 'back':
         case 'forward': {
-          method += capitalize(to)
+          method += capitalize(where)
           break
         }
 
         default: {
-          args.push(to)
+          args.push(where)
           method += 'to'
         }
       }
@@ -342,7 +358,7 @@ const main = async () => {
   }
 
   if (config.useStealthPlugin) {
-    puppeteer.use(StealthPlugin)
+    puppeteer.use(StealthPlugin())
   }
 
   const browser = await puppeteer.launch({
