@@ -1,5 +1,7 @@
 # robit
 
+[![js-standard-style](https://img.shields.io/badge/code%20style-standard-brightgreen.svg?style=flat)](https://standardjs.com/)
+
 Easily configure and run browser automation jobs!
 
 ## Install

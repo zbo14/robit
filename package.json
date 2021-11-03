@@ -23,7 +23,7 @@
     "web scraping"
   ],
   "author": "Zachary Balder",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "devDependencies": {
     "jsdoc": "^3.6.7",
     "standard": "^16.0.4"
