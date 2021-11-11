@@ -288,6 +288,11 @@ const handleStep = async (browser, page, step, i = 0) => {
       break
     }
 
+    case 'hover': {
+      await page.hover(step.selector)
+      break
+    }
+
     case 'repeat': {
       const iters = Math.abs(step.times) || 10
 
@@ -318,6 +323,11 @@ const handleStep = async (browser, page, step, i = 0) => {
       await fs.promises.mkdir(dirname, { recursive: true }).catch(() => {})
       await page.screenshot({ ...step, path: filename })
 
+      break
+    }
+
+    case 'select': {
+      await page.select(step.selector, ...step.values)
       break
     }
 
